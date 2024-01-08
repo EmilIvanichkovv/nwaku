@@ -64,3 +64,7 @@ coverage_html_report/
 
 # Wildcard
 *.ignore.*
+
+# Nix & Direnv
+.direnv
+result
