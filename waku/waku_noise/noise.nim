@@ -64,11 +64,11 @@ proc encryptWithAd*(state: var CipherState, ad, plaintext: openArray[byte]): seq
 
   # If an encryption key is set in the Cipher state, we proceed with encryption
   if state.hasKey:
-  
+
     # The output is the concatenation of the ciphertext and authorization tag
     # We define its length accordingly
     ciphertext = newSeqOfCap[byte](plaintext.len + sizeof(ChaChaPolyTag))
-    
+
     # Since ChaChaPoly encryption primitive overwrites the input with the output,
     # we copy the plaintext in the output ciphertext variable and we pass it to encryption
     ciphertext.add(plaintext)
@@ -117,7 +117,7 @@ proc decryptWithAd*(state: var CipherState, ad, ciphertext: openArray[byte]): se
 
     # We read the authorization appendend at the end of a ciphertext
     let inputAuthorizationTag = ciphertext.toOpenArray(ciphertext.len - ChaChaPolyTag.len, ciphertext.high).intoChaChaPolyTag
-      
+
     var
       authorizationTag: ChaChaPolyTag
       nonce: ChaChaPolyNonce
@@ -127,16 +127,16 @@ proc decryptWithAd*(state: var CipherState, ad, ciphertext: openArray[byte]): se
     nonce[4..<12] = toBytesLE(state.n)
 
     # Since ChaChaPoly decryption primitive overwrites the input with the output,
-    # we copy the ciphertext (authorization tag excluded) in the output plaintext variable and we pass it to decryption  
+    # we copy the ciphertext (authorization tag excluded) in the output plaintext variable and we pass it to decryption
     plaintext = ciphertext[0..(ciphertext.high - ChaChaPolyTag.len)]
-    
+
     ChaChaPoly.decrypt(state.k, nonce, authorizationTag, plaintext, ad)
 
     # We check if the input authorization tag matches the decryption authorization tag
     if inputAuthorizationTag != authorizationTag:
       debug "decryptWithAd failed", plaintext = plaintext, ciphertext = ciphertext, inputAuthorizationTag = inputAuthorizationTag, authorizationTag = authorizationTag
       raise newException(NoiseDecryptTagError, "decryptWithAd failed tag authentication.")
-    
+
     # We increase the Cipher state nonce
     inc state.n
     # If the nonce is greater than the maximum allowed nonce, we raise an exception
@@ -144,8 +144,8 @@ proc decryptWithAd*(state: var CipherState, ad, ciphertext: openArray[byte]): se
       raise newException(NoiseNonceMaxError, "Noise max nonce value reached")
 
     trace "decryptWithAd", inputAuthorizationTag = inputAuthorizationTag, authorizationTag = authorizationTag, nonce = state.n
-  
-  # Otherwise we return the input ciphertext according to specification http://www.noiseprotocol.org/noise.html#the-cipherstate-object    
+
+  # Otherwise we return the input ciphertext according to specification http://www.noiseprotocol.org/noise.html#the-cipherstate-object
   else:
 
     plaintext = @ciphertext
@@ -198,7 +198,7 @@ proc mixKey*(ss: var SymmetricState, inputKeyMaterial: openArray[byte]) =
   # We derive two keys using HKDF
   var tempKeys: array[2, ChaChaPolyKey]
   sha256.hkdf(ss.ck, inputKeyMaterial, [], tempKeys)
-  # We update ck and the Cipher state's key k using the output of HDKF 
+  # We update ck and the Cipher state's key k using the output of HDKF
   ss.ck = tempKeys[0]
   ss.cs = CipherState(k: tempKeys[1])
   trace "mixKey", ck = ss.ck, k = ss.cs.k
@@ -239,7 +239,10 @@ proc encryptAndHash*(ss: var SymmetricState, plaintext: openArray[byte], extraAd
   # The output ciphertext
   var ciphertext: seq[byte]
   # The additional data
+  echo "extraAd", extraAd
   let ad = @(ss.h.data) & @(extraAd)
+  echo "ss.h.data", ss.h.data
+  echo "ad", ad
   # Note that if an encryption key is not set yet in the Cipher state, ciphertext will be equal to plaintex
   ciphertext = ss.cs.encryptWithAd(ad, plaintext)
   # We call mixHash over the result
@@ -320,7 +323,7 @@ proc encrypt*(
   # we copy the plaintext into the ciphertext variable and we pass the latter to encrypt
   ciphertext.data.add plaintext
   # TODO: add padding
-  # ChaChaPoly.encrypt takes as input: the key (k), the nonce (nonce), a data structure for storing the computed authorization tag (tag), 
+  # ChaChaPoly.encrypt takes as input: the key (k), the nonce (nonce), a data structure for storing the computed authorization tag (tag),
   # the plaintext (overwritten to ciphertext) (data), the associated data (ad)
   ChaChaPoly.encrypt(state.k, state.nonce, ciphertext.tag, ciphertext.data, state.ad)
   return ciphertext
@@ -329,7 +332,7 @@ proc encrypt*(
 # It takes a Cipher State (with key, nonce, and associated data) and decrypts a ciphertext
 # The cipher state is not changed
 proc decrypt*(
-    state: ChaChaPolyCipherState, 
+    state: ChaChaPolyCipherState,
     ciphertext: ChaChaPolyCiphertext): seq[byte]
     {.raises: [Defect, NoiseEmptyChaChaPolyInput, NoiseDecryptTagError].} =
   # If ciphertext is empty, we raise an error
@@ -343,7 +346,7 @@ proc decrypt*(
   # Since ChaChaPoly's library "decrypt" primitive directly changes the input ciphertext to the plaintext,
   # we copy the ciphertext into the plaintext variable and we pass the latter to decrypt
   var plaintext = ciphertext.data
-  # ChaChaPoly.decrypt takes as input: the key (k), the nonce (nonce), a data structure for storing the computed authorization tag (tag), 
+  # ChaChaPoly.decrypt takes as input: the key (k), the nonce (nonce), a data structure for storing the computed authorization tag (tag),
   # the ciphertext (overwritten to plaintext) (data), the associated data (ad)
   ChaChaPoly.decrypt(state.k, state.nonce, tagOut, plaintext, state.ad)
   # TODO: add unpadding

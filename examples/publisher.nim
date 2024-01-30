@@ -8,7 +8,8 @@ import
   libp2p/crypto/crypto,
   eth/keys,
   eth/p2p/discoveryv5/enr,
-  testutils/unittests
+  testutils/unittests,
+  nimcrypto/utils
 
 
 import
@@ -25,7 +26,7 @@ import
   ../waku/waku_noise/noise_handshake_processing,
   ../waku/waku_core
 
-import ../../nimbus-node-manager/libs/waku-utils/waku_handshake_utils
+import ../../status-node-manager/libs/waku-utils/waku_handshake_utils
 
 proc now*(): Timestamp =
   getNanosecondTime(getTime().toUnixFloat())
@@ -33,12 +34,7 @@ proc now*(): Timestamp =
 # An accesible bootstrap node. See wakuv2.prod fleets.status.im
 
 
-const bootstrapNode = "enr:-Nm4QOdTOKZJKTUUZ4O_W932CXIET-M9NamewDnL78P5u9D" &
-                      "OGnZlK0JFZ4k0inkfe6iY-0JAaJVovZXc575VV3njeiABgmlkgn" &
-                      "Y0gmlwhAjS3ueKbXVsdGlhZGRyc7g6ADg2MW5vZGUtMDEuYWMtY" &
-                      "24taG9uZ2tvbmctYy53YWt1djIucHJvZC5zdGF0dXNpbS5uZXQG" &
-                      "H0DeA4lzZWNwMjU2azGhAo0C-VvfgHiXrxZi3umDiooXMGY9FvY" &
-                      "j5_d1Q4EeS7eyg3RjcIJ2X4N1ZHCCIyiFd2FrdTIP"
+const bootstrapNode = "enr:-P-4QGVNANzbhCI49du6Moyw98AjuMhKoOpE_Jges9JlCq-ICAVadktjfcNpuhQgT0g1cu86_S3nbM7eYkCsqDAQG7UBgmlkgnY0gmlwhI_G-a6KbXVsdGlhZGRyc7hgAC02KG5vZGUtMDEuZG8tYW1zMy5zdGF0dXMucHJvZC5zdGF0dXNpbS5uZXQGdl8ALzYobm9kZS0wMS5kby1hbXMzLnN0YXR1cy5wcm9kLnN0YXR1c2ltLm5ldAYBu94DiXNlY3AyNTZrMaECoVyonsTGEQvVioM562Q1fjzTb_vKD152PPIdsV7sM6SDdGNwgnZfg3VkcIIjKIV3YWt1Mg8"
 
 # careful if running pub and sub in the same machine
 const wakuPort = 60000
@@ -62,8 +58,9 @@ proc setupAndPublish(rng: ref HmacDrbgContext) {.async.} =
     let s = aliceInfo.commitment
 
     let qr = readFile("qr.txt")
-    let qrMessageNameTag = cast[seq[byte]](readFile("qrMessageNametag.txt"))
-    echo qrMessageNameTag
+    let (_, _, _, readEphemeralKey, _) = fromQr(qr)
+    # let qrMessageNameTag = cast[seq[byte]](readFile("qrMessageNametag.txt"))
+    var qrMessageNameTag = fromHex(readFile("qrMessageNametag.txt"))
 
     # We set the contentTopic from the content topic parameters exchanged in the QR
     let contentTopic = initContentTopicFromQr(qr)
@@ -134,7 +131,7 @@ proc setupAndPublish(rng: ref HmacDrbgContext) {.async.} =
     # wait for a minimum of peers to be connected, otherwise messages wont be gossiped
     while true:
       let numConnectedPeers = node.peerManager.peerStore[ConnectionBook].book.values().countIt(it == Connected)
-      if numConnectedPeers >= 6:
+      if numConnectedPeers >= 2:
         notice "publisher is ready", connectedPeers=numConnectedPeers, required=6
         break
       notice "waiting to be ready", connectedPeers=numConnectedPeers, required=6
@@ -187,6 +184,8 @@ proc setupAndPublish(rng: ref HmacDrbgContext) {.async.} =
       if readyForFinalization:
         notice "Finalizing handshake"
         aliceHSResult = finalizeHandshake(aliceHS)
+        echo "nametagsOutbound", aliceHSResult.nametagsOutbound
+        echo "nametagsInbound", aliceHSResult.nametagsInbound
         await sleepAsync(5000)
         break
       await sleepAsync(5000)
@@ -196,17 +195,75 @@ proc setupAndPublish(rng: ref HmacDrbgContext) {.async.} =
       realMessage: seq[byte]
       readMessage: seq[byte]
 
-    # Bob writes to Alice
-    realMessage = @[(byte)42,42,42,42]
-    let realMessageContentTopic = "/" & contentTopicInfo.applicationName & "/" & contentTopicInfo.applicationVersion & "/wakunoise/1/sessions_shard-" & contentTopicInfo.shardId & "/real" & "/proto"
-    payload2 = writeMessage(aliceHSResult, realMessage, outboundMessageNametagBuffer = aliceHSResult.nametagsOutbound)
-    echo aliceHSResult.h
-    wakuMsg = encodePayloadV2(  payload2, realMessageContentTopic)
-    await node.publish(some(pubSubTopic), wakuMsg.get)
-    notice "Sending real message", payload=payload2,
-                                  pubsubTopic=pubsubTopic,
-                                  contentTopic=realMessageContentTopic
 
+    # # Scenario 1: Dump a lof of messages
+    # var i = 150
+    # while i > 0:
+    #   # Bob writes to Alice
+    #   realMessage = @[(byte)42,42,42,42]
+    #   let realMessage2 = @[(byte)11,1,11,1]
+    #   let realMessageContentTopic = "/" & contentTopicInfo.applicationName & "/" & contentTopicInfo.applicationVersion & "/wakunoise/1/sessions_shard-" & contentTopicInfo.shardId & "/real" & "/proto"
+
+    #   payload2 = writeMessage(aliceHSResult, realMessage, outboundMessageNametagBuffer = aliceHSResult.nametagsOutbound)
+
+    #   wakuMsg = encodePayloadV2(  payload2, contentTopic)
+    #   await node.publish(some(pubSubTopic), wakuMsg.get)
+    #   notice "Sending real message", payload=payload2.messageNametag
+
+    #   await sleepAsync(100)
+    #   i = i - 1
+
+
+    # Scenario 2: Fake lost messages
+    let msgFirst = @[(byte)11,11,11,11]
+    let payloadFirst = writeMessage(aliceHSResult, msgFirst, outboundMessageNametagBuffer = aliceHSResult.nametagsOutbound)
+    let wakuMsgFirst = encodePayloadV2(  payloadFirst, contentTopic)
+    await node.publish(some(pubSubTopic), wakuMsgFirst.get)
+
+    let lostMsg1 = @[(byte)61,66,66,66]
+    let payloadLost1 = writeMessage(aliceHSResult, lostMsg1, outboundMessageNametagBuffer = aliceHSResult.nametagsOutbound)
+    let wakuMsgLost1 = encodePayloadV2(  payloadLost1, contentTopic)
+
+    let lostMsg2 = @[(byte)62,66,66,66]
+    let payloadLost2 = writeMessage(aliceHSResult, lostMsg2, outboundMessageNametagBuffer = aliceHSResult.nametagsOutbound)
+    let wakuMsgLost2 = encodePayloadV2(  payloadLost2, contentTopic)
+
+    let thirdMsg = @[(byte)11,1,11,1]
+    let payload3 = writeMessage(aliceHSResult, thirdMsg, outboundMessageNametagBuffer = aliceHSResult.nametagsOutbound)
+    let wakuMsg3 = encodePayloadV2(  payload3, contentTopic)
+    await node.publish(some(pubSubTopic), wakuMsg3.get)
+
+    let lostMsg3 = @[(byte)63,66,66,66]
+    let payloadLost3 = writeMessage(aliceHSResult, lostMsg3, outboundMessageNametagBuffer = aliceHSResult.nametagsOutbound)
+    let wakuMsgLost3 = encodePayloadV2(  payloadLost3, contentTopic)
+
+    await sleepAsync(10000)
+    await node.publish(some(pubSubTopic), wakuMsgLost1.get)
+
+    let thirdMsg1 = @[(byte)11,1,11,1]
+    let payload31 = writeMessage(aliceHSResult, thirdMsg1, outboundMessageNametagBuffer = aliceHSResult.nametagsOutbound)
+    let wakuMsg31 = encodePayloadV2(  payload31, contentTopic)
+    await node.publish(some(pubSubTopic), wakuMsg31.get)
+
+    await sleepAsync(10000)
+    await node.publish(some(pubSubTopic), wakuMsgLost2.get)
+    await sleepAsync(1000)
+
+    await node.publish(some(pubSubTopic), wakuMsgLost3.get)
+
+     # Bob writes to Alice
+    # realMessage = @[(byte)5,5,5,5]
+    # let realMessageContentTopic = "/" & contentTopicInfo.applicationName & "/" & contentTopicInfo.applicationVersion & "/wakunoise/1/sessions_shard-" & contentTopicInfo.shardId & "/real" & "/proto"
+
+    # payload2 = writeMessage(aliceHSResult, realMessage, outboundMessageNametagBuffer = aliceHSResult.nametagsOutbound)
+
+    # wakuMsg = encodePayloadV2(  payload2, contentTopic)
+
+    # await node.publish(some(pubSubTopic), wakuMsg.get)
+    # notice "Sending real message", payload=payload2,
+    #                                 wakuMsg=wakuMsg,
+    #                               pubsubTopic=pubsubTopic,
+    #                               contentTopic=contentTopic
 
 when isMainModule:
   let rng = crypto.newRng()
