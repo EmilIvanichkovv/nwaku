@@ -59,8 +59,8 @@ proc setupAndPublish(rng: ref HmacDrbgContext) {.async.} =
 
     let qr = readFile("qr.txt")
     let (_, _, _, readEphemeralKey, _) = fromQr(qr)
-    # let qrMessageNameTag = cast[seq[byte]](readFile("qrMessageNametag.txt"))
-    var qrMessageNameTag = fromHex(readFile("qrMessageNametag.txt"))
+    let qrMessageNameTag = cast[seq[byte]](readFile("qrMessageNametag.txt"))
+    # var qrMessageNameTag = fromHex(readFile("qrMessageNametag.txt"))
 
     # We set the contentTopic from the content topic parameters exchanged in the QR
     let contentTopic = initContentTopicFromQr(qr)
@@ -141,54 +141,8 @@ proc setupAndPublish(rng: ref HmacDrbgContext) {.async.} =
     # see spec: https://rfc.vac.dev/spec/23/
     let pubSubTopic = PubsubTopic("/waku/2/default-waku/proto")
 
-    ###############################################
-    # We prepare a Waku message from Alice's payload2
-    echo "qrMessageNametag ", qrMessageNametag
-    echo "aliceMessageNametag ", aliceMessageNametag
 
-    wakuMsg = prepareHandShakeInitiatorMsg(rng, contentTopic, aliceInfo,
-                                           qrMessageNameTag, aliceMessageNametag,
-                                           aliceHS, aliceStep)
-    echo "aliceMessageNametag ", aliceMessageNametag
-
-    await publishHandShakeInitiatorMsg(node, pubSubTopic, contentTopic, wakuMsg.get())
-    echo "aliceMessageNametag ", aliceMessageNametag
-
-    # aliceMessageNametag = toMessageNametag(aliceHS)
-    let step2Nametag = aliceMessageNametag
-    echo "step2Nametag ", step2Nametag
-    proc handler(topic: PubsubTopic, msg: WakuMessage): Future[void] {.async, gcsafe.} =
-      # let payloadStr = string.fromBytes(msg.payload)
-      if msg.contentTopic == contentTopic:
-        readPayloadV2 = decodePayloadV2(msg).get()
-        if readPayloadV2.messageNametag == step2Nametag:
-          echo "aliceMessageNametag ", aliceMessageNametag
-
-          handleHandShakeMsg(rng, pubSubTopic, contentTopic,step = 2, readPayloadV2,
-                             aliceStep, aliceHS, aliceMessageNametag)
-          echo "aliceMessageNametag ", aliceMessageNametag
-
-          # await sleepAsync(5000)
-          let handShakeMsgStep3 = prepareHandShakeMsg(rng, contentTopic, aliceInfo,
-                                                    aliceMessageNametag, aliceHS,
-                                                    aliceStep, step = 3)
-          echo "aliceMessageNametag ", aliceMessageNametag
-
-          await publishHandShakeMsg( node, pubSubTopic, contentTopic, handShakeMsgStep3.get(), 3)
-          readyForFinalization = true
-          echo "aliceMessageNametag ", aliceMessageNametag
-
-    node.subscribe((kind: PubsubSub, topic: pubsubTopic), some(handler))
-
-    while true:
-      if readyForFinalization:
-        notice "Finalizing handshake"
-        aliceHSResult = finalizeHandshake(aliceHS)
-        echo "nametagsOutbound", aliceHSResult.nametagsOutbound
-        echo "nametagsInbound", aliceHSResult.nametagsInbound
-        await sleepAsync(5000)
-        break
-      await sleepAsync(5000)
+    aliceHSResult = await initiatorHandshake(rng, node, pubSubTopic, contentTopic,qr, qrMessageNameTag, aliceInfo)
 
     var
       payload2: PayloadV2
@@ -219,6 +173,8 @@ proc setupAndPublish(rng: ref HmacDrbgContext) {.async.} =
     let payloadFirst = writeMessage(aliceHSResult, msgFirst, outboundMessageNametagBuffer = aliceHSResult.nametagsOutbound)
     let wakuMsgFirst = encodePayloadV2(  payloadFirst, contentTopic)
     await node.publish(some(pubSubTopic), wakuMsgFirst.get)
+    notice "Sending real message", realMessage=msgFirst, payload=payloadFirst
+
 
     let lostMsg1 = @[(byte)61,66,66,66]
     let payloadLost1 = writeMessage(aliceHSResult, lostMsg1, outboundMessageNametagBuffer = aliceHSResult.nametagsOutbound)
@@ -232,6 +188,8 @@ proc setupAndPublish(rng: ref HmacDrbgContext) {.async.} =
     let payload3 = writeMessage(aliceHSResult, thirdMsg, outboundMessageNametagBuffer = aliceHSResult.nametagsOutbound)
     let wakuMsg3 = encodePayloadV2(  payload3, contentTopic)
     await node.publish(some(pubSubTopic), wakuMsg3.get)
+    notice "Sending real message", realMessage=thirdMsg, payload=payload3
+
 
     let lostMsg3 = @[(byte)63,66,66,66]
     let payloadLost3 = writeMessage(aliceHSResult, lostMsg3, outboundMessageNametagBuffer = aliceHSResult.nametagsOutbound)
@@ -239,17 +197,25 @@ proc setupAndPublish(rng: ref HmacDrbgContext) {.async.} =
 
     await sleepAsync(10000)
     await node.publish(some(pubSubTopic), wakuMsgLost1.get)
+    notice "Sending real message", realMessage=lostMsg1, payload=payloadLost1
+
 
     let thirdMsg1 = @[(byte)11,1,11,1]
     let payload31 = writeMessage(aliceHSResult, thirdMsg1, outboundMessageNametagBuffer = aliceHSResult.nametagsOutbound)
     let wakuMsg31 = encodePayloadV2(  payload31, contentTopic)
     await node.publish(some(pubSubTopic), wakuMsg31.get)
+    notice "Sending real message", realMessage=thirdMsg1, payload=payload31
+
 
     await sleepAsync(10000)
     await node.publish(some(pubSubTopic), wakuMsgLost2.get)
+    notice "Sending real message", realMessage=lostMsg2, payload=payloadLost2
+
     await sleepAsync(1000)
 
     await node.publish(some(pubSubTopic), wakuMsgLost3.get)
+    notice "Sending real message", realMessage=lostMsg3, payload=payloadLost3
+
 
      # Bob writes to Alice
     # realMessage = @[(byte)5,5,5,5]

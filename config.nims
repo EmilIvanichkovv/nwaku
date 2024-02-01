@@ -80,7 +80,7 @@ if not defined(macosx):
     --define:nimStackTraceOverride
     switch("import", "libbacktrace")
 
---define:nimOldCaseObjects # https://github.com/status-im/nim-confutils/issues/9
+--define:nimOldCaseObjects # https://github.com/status-im/nim-confutils/issues/9 //todo
 
 # `switch("warning[CaseTransition]", "off")` fails with "Error: invalid command line option: '--warning[CaseTransition]'"
 switch("warning", "CaseTransition:off")

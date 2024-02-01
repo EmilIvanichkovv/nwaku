@@ -121,7 +121,7 @@ proc setupAndSubscribe(rng: ref HmacDrbgContext) {.async.} =
     # wait for a minimum of peers to be connected, otherwise messages wont be gossiped
     while true:
       let numConnectedPeers = node.peerManager.peerStore[ConnectionBook].book.values().countIt(it == Connected)
-      if numConnectedPeers >= 6:
+      if numConnectedPeers >= 2:
         notice "subscriber is ready", connectedPeers=numConnectedPeers, required=6
         break
       notice "waiting to be ready", connectedPeers=numConnectedPeers, required=6
@@ -150,8 +150,8 @@ proc setupAndSubscribe(rng: ref HmacDrbgContext) {.async.} =
           await publishHandShakeMsg(node, pubSubTopic, contentTopic,
                                     wakuMsg.get(), step = 2)
 
-        elif readPayloadV2.messageNametag != step2Nameteag:
-          # bobMessageNametag = toMessageNametag(bobHS)
+          bobMessageNametag = toMessageNametag(bobHS)
+        elif readPayloadV2.messageNametag == bobMessageNametag:
           handleHandShakeMsg(rng, pubSubTopic, contentTopic, step = 3, readPayloadV2,
                              bobStep, bobHS, bobMessageNametag)
         #   notice "step 3 message received", payload=readPayloadV2,
@@ -163,32 +163,31 @@ proc setupAndSubscribe(rng: ref HmacDrbgContext) {.async.} =
           readyForFinalization = true
 
     node.subscribe((kind: PubsubSub, topic: pubsubTopic), some(handler))
+
+    var handshakeFinalized = false
     while true:
       if readyForFinalization:
         notice "Finalizing handshake"
         bobHSResult = finalizeHandshake(bobHS)
-
-        proc realMessageHandler(topic: PubsubTopic, msg: WakuMessage): Future[void] {.async, gcsafe.} =
-          let realMessageContentTopic = "/" & contentTopicInfo.applicationName & "/" & contentTopicInfo.applicationVersion & "/wakunoise/1/sessions_shard-" & contentTopicInfo.shardId & "/real" & "/proto"
-
-          if msg.contentTopic == realMessageContentTopic:
-            readPayloadV2 = decodePayloadV2(msg).get()
-            notice "Received real message", payload=readPayloadV2,
-                              pubsubTopic=pubsubTopic,
-                              contentTopic=msg.contentTopic,
-                              timestamp=msg.timestamp
-            let readMessage = readMessage(bobHSResult, readPayloadV2, inboundMessageNametagBuffer = bobHSResult.nametagsInbound).get()
-            echo readMessage
-            echo bobHSResult.h
-
-
-        node.subscribe((kind: PubsubSub, topic: pubsubTopic), some(realMessageHandler))
+        notice "Handshake finalized successfully"
+        handshakeFinalized = true
         break
       await sleepAsync(5000)
 
+    if handshakeFinalized:
+      proc realMessageHandler(topic: PubsubTopic, msg: WakuMessage): Future[void] {.async, gcsafe.} =
+        let realMessageContentTopic = "/" & contentTopicInfo.applicationName & "/" & contentTopicInfo.applicationVersion & "/wakunoise/1/sessions_shard-" & contentTopicInfo.shardId & "/real" & "/proto"
 
+        if msg.contentTopic == contentTopic:
+          readPayloadV2 = decodePayloadV2(msg).get()
+          notice "Received real message", payload=readPayloadV2,
+                            pubsubTopic=pubsubTopic,
+                            contentTopic=msg.contentTopic,
+                            timestamp=msg.timestamp
+          let readMessage = readMessage(bobHSResult, readPayloadV2, inboundMessageNametagBuffer = bobHSResult.nametagsInbound).get()
+          echo readMessage
 
-
+      node.subscribe((kind: PubsubSub, topic: pubsubTopic), some(realMessageHandler))
 
 
 when isMainModule:
